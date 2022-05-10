@@ -24,7 +24,7 @@ from tqdm import tqdm
 load_dotenv()
 JIRA = Jira(
     url=getenv("URL"),
-    username=getenv("USERNAME"),
+    username=getenv("USER_NAME"),
     password=getenv("PASSWORD"),
     timeout=int(getenv("TIMEOUT"))
 )
@@ -43,7 +43,7 @@ def get_history(issue_key):
         for histories in JIRA.get_issue_changelog(issue_key)['histories']:
             for item in histories['items']:
                 history.append({
-                    'who': histories.get('author', {'name': 'N/A'}).get('name', 'N/A'),
+                    'who': get_user_name(histories.get('author', dict())),
                     'when': histories.get('created', 'N/A'),
                     'what': item.get('field', 'N/A'),
                     'from': item.get('fromString', 'N/A'),
@@ -52,6 +52,10 @@ def get_history(issue_key):
     except:
         print(f"WARNING: Could not get history for {issue_key}")
     return history
+
+
+def get_user_name(a):
+    return a.get('name', a.get('emailAddress', a.get('displayName', a.get('accountId', 'N/A'))))
 
 
 def simplify_issue(issue):
@@ -64,32 +68,41 @@ def simplify_issue(issue):
                     value = value['value']
                 elif 'id' in value and 'name' in value:
                     value = value['name']
+                elif 'emailAddress' in value and 'displayName' in value:
+                    value = value['displayName']
+                elif 'accountId' in value and 'displayName' in value:
+                    value = value['displayName']
                 elif 'emailAddress' in value and 'name' in value:
                     value = value['name']
+                elif 'emailAddress' in value and 'avatarUrls' in value:
+                    value = value['emailAddress']
                 elif 'watchCount' in value and 'isWatching' in value:
                     value = value['watchCount']
+                elif 'votes' in value and 'hasVoted' in value:
+                    value = value['votes']
                 elif 'comments' in value and 'total' in value:
                     value = value['comments']
                     for comment in value:
                         if 'author' in comment:
-                            comment['author'] = comment['author']['name']
+                            comment['author'] = get_user_name(comment['author'])
                         if 'updateAuthor' in comment:
-                            comment['updateAuthor'] = comment['updateAuthor']['name']
+                            comment['updateAuthor'] = get_user_name(comment['updateAuthor'])
             fields[custom_fields.get(f, f)] = value
 
     links = list()
     for link in issue['fields'].get('issuelinks', []):
-        link_type = link['type']['name']
-        in_key = None
-        out_key = None
         if 'inwardIssue' in link:
-            in_key = link['inwardIssue']['key']
+            key = link['inwardIssue']['key']
+            link_type = link['type']['inward']
+            link_direction = 'inward'
         if 'outwardIssue' in link:
-            out_key = link['outwardIssue']['key']
+            key = link['outwardIssue']['key']
+            link_type = link['type']['outward']
+            link_direction = 'outward'
         links.append({
             'type': link_type,
-            'in': in_key,
-            'out': out_key
+            'key': key,
+            'direction': link_direction
         })
 
     for f in fields_to_delete:
@@ -103,20 +116,22 @@ def get_all_issues(project):
     issues = list()
     start_at = 0
     max_results = 100000
-    total = max_results + 1
-    while start_at < total:
-        print(f'Querying starting from {start_at}...')
-        res = JIRA.jql(f'project = {project}', start=start_at, limit=max_results)
-        max_results = res['maxResults']
-        start_at = res['startAt'] + max_results
-        total = res['total']
-        issues += res['issues']
-        print(f'Done with {max_results} max results and {total} total issues')
+    res = JIRA.jql(f'project = {project}', start=start_at, limit=1)
+    total = res['total']
+    with tqdm(total=total) as pbar:
+        while start_at < total:
+            res = JIRA.jql(f'project = {project}', start=start_at, limit=max_results)
+            max_results = res['maxResults']
+            start_at = res['startAt'] + max_results
+            total = res['total']
+            issues += res['issues']
+            pbar.update(len(res['issues']))
     return issues
 
 
 def get_issues(project):
     res = get_all_issues(project)
+    print()
     print(f'Queried {len(res)} issues')
     i = 0
     with tqdm(total=len(res)) as pbar:
@@ -131,13 +146,10 @@ def get_issues(project):
                     simple_subtasks.append(simplify_issue(subtask))
                 simple['Sub-Tasks'] = simple_subtasks
 
-            #print(f'{i} of {len(res)} - {simple["Issue Type"]} {key} ({simple["Status"]}): {simple["Summary"]}')
             history = get_history(key)
             simple['history'] = history
-            #print(f'{prefix}  └ {len(history)} history records')
             all_issues[key] = simple
             dump_one(f'issues/{key}.json', simple)
-            #sleep(5)
             pbar.update(1)
 
     print(f'Processed {len(res)} issues')

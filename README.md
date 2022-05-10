@@ -1,3 +1,9 @@
+# ALP Jira metrics
+
+A simple script to help understanding why some of the Jira tickets pass QC on the first try, while the others take multiple iterations.
+
+**Below this line is the original README of [jiractor](https://github.com/vilia-fr/jiractor) tool.**
+
 # Jiractor is a JIRA extractor
 
 A simple command-line tool to extract all JIRA issues for a given project in 
